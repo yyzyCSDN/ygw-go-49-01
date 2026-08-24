@@ -142,7 +142,16 @@ func (m *SessionManager) Abort(ctx context.Context, tokenID, sessionID string) e
 }
 
 // IsDigestUploading reports whether any session in the repository is still
-// uploading an object with the given expected digest.
+// uploading an object with the given expected digest. A session that has not
+// reached the committed state means the layer's bytes are not durably stored,
+// so manifest validation must treat the digest as unfinished.
 func (m *SessionManager) IsDigestUploading(ctx context.Context, repoName, digest string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.sessions {
+		if s.Repo == repoName && s.Digest == digest && s.State != model.SessionCommitted {
+			return true
+		}
+	}
 	return false
 }

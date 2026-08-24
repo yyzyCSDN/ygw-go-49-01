@@ -15,7 +15,10 @@ func (s *memoryStore) Validate(ctx context.Context, repo string, m *model.Manife
 		return err
 	}
 	for _, descriptor := range m.Descriptors() {
-		if s.blobs.Exists(ctx, repo, descriptor.Digest) {
+		// Only a committed blob has its bytes stored and its digest verified.
+		// A staged or uploading blob has a metadata record (so Exists is true)
+		// but no readable content; accepting it would publish a broken image.
+		if s.blobs.Committed(ctx, repo, descriptor.Digest) {
 			continue
 		}
 		if s.uploads != nil && s.uploads.IsDigestUploading(ctx, repo, descriptor.Digest) {
