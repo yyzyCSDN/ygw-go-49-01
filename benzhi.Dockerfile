@@ -14,7 +14,7 @@ COPY web ./web
 RUN CGO_ENABLED=0 GOARCH=$TARGETARCH go build -mod=vendor -trimpath -o /out/artifactregistry ./cmd/artifactregistry
 
 FROM golang:1.23.12
-ENV GOPROXY=off GOSUMDB=off GOFLAGS=-mod=vendor CGO_ENABLED=0
+ENV GOPROXY=off GOSUMDB=off GOFLAGS=-mod=vendor
 WORKDIR /app
 COPY --from=builder /src/go.mod /src/go.sum /app/
 COPY --from=builder /src/vendor /app/vendor

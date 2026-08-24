@@ -67,9 +67,13 @@ func (m *SessionManager) UploadChunk(ctx context.Context, tokenID, sessionID str
 }
 
 // ResumeOffset returns the byte offset at which the next chunk should start.
-// The offset is derived from the contiguous run of present chunks, so a
-// partially uploaded last chunk is counted by its actual size, not by the
-// fixed chunk size.
+// The offset is the length of the contiguous run of present chunks starting at
+// index 0: each present chunk contributes its actual stored size, and the run
+// stops at the first missing index. Counting only a contiguous prefix — and
+// using real byte sizes rather than the fixed chunkSize — means a gap left by
+// an out-of-order or interrupted upload is never papered over, so the client
+// resumes exactly where the on-disk bytes end. The last chunk is counted by
+// its actual size, not by chunkSize, so a partial tail never overruns Size.
 func (m *SessionManager) ResumeOffset(ctx context.Context, tokenID, sessionID string) (int64, error) {
 	if err := m.auth.ValidateForSession(ctx, tokenID, sessionID); err != nil {
 		return 0, err
@@ -83,7 +87,16 @@ func (m *SessionManager) ResumeOffset(ctx context.Context, tokenID, sessionID st
 	if s.State == model.SessionCommitted {
 		return s.Size, nil
 	}
-	return int64(len(s.Chunks)) * s.ChunkSize, nil
+	chunks := m.chunkData[sessionID]
+	var offset int64
+	for i := 0; ; i++ {
+		data, exists := chunks[i]
+		if !exists {
+			break
+		}
+		offset += int64(len(data))
+	}
+	return offset, nil
 }
 
 // Complete assembles every chunk in index order, commits the assembled blob
