@@ -100,6 +100,51 @@ func TestReachableBlobSurvivesSweep(t *testing.T) {
 	}
 }
 
+func TestSweepSparesInFlightUploadRef(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore(3)
+	data := []byte("concurrent-push-layer")
+	b, err := store.Put(ctx, "repo-a", data)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	// The blob is committed but unreferenced by any tag yet: a concurrent push
+	// has written the layer and holds its upload reference (RefCount == 1)
+	// while the manifest is still being stored. GC must not reclaim it.
+	removed, err := SweepUnreferencedBlobs(ctx, store, "repo-a", map[string]bool{})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("in-flight blob must survive sweep, removed %v", removed)
+	}
+	if !store.Exists(ctx, "repo-a", b.Digest) {
+		t.Fatal("in-flight blob must still be present")
+	}
+}
+
+func TestSweepReclaimsAfterUploadRefReleased(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore(3)
+	b, err := store.Put(ctx, "repo-a", []byte("released-again"))
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := store.DecRef(ctx, "repo-a", b.Digest); err != nil {
+		t.Fatalf("decref: %v", err)
+	}
+	removed, err := SweepUnreferencedBlobs(ctx, store, "repo-a", map[string]bool{})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != b.Digest {
+		t.Fatalf("released blob must be reclaimed, got %v", removed)
+	}
+	if store.Exists(ctx, "repo-a", b.Digest) {
+		t.Fatal("released blob must be gone")
+	}
+}
+
 func TestShardStable(t *testing.T) {
 	if Shard("sha256:aaa", 8) != Shard("sha256:aaa", 8) {
 		t.Fatal("shard must be stable for a digest")

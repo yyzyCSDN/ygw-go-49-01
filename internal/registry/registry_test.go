@@ -123,6 +123,38 @@ func TestChunkedRoundTripThroughRegistry(t *testing.T) {
 	}
 }
 
+func TestGCSparesBlobWrittenDuringMark(t *testing.T) {
+	// Regression: a blob pushed while GC Mark is running (or just after it
+	// snapshots the reachable set, before its manifest is tagged) was swept as
+	// an orphan even though a push still held its upload reference. The pull
+	// that followed reported the blob as missing. Sweep must honor the
+	// in-flight upload reference instead of only the reachable snapshot.
+	ctx := context.Background()
+	reg, tokenID := newRegistry(t)
+	gc, err := reg.gcForTest()
+	if err != nil {
+		t.Fatalf("gc handle: %v", err)
+	}
+	reachable, _, err := gc.Mark(ctx, "repo-a")
+	if err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	// Concurrent push lands a layer after Mark snapshotted the reachable set.
+	// No manifest or tag points at it yet; its only anchor is the upload
+	// reference (RefCount == 1).
+	layer := []byte("raced-layer-bytes")
+	layerBlob, err := reg.PushBlob(ctx, tokenID, "repo-a", layer)
+	if err != nil {
+		t.Fatalf("push blob: %v", err)
+	}
+	if err := reg.gcSweepForTest(ctx, "repo-a", reachable); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if _, err := reg.PullBlob(ctx, tokenID, "repo-a", layerBlob.Digest); err != nil {
+		t.Fatalf("blob written during GC must survive sweep: %v", err)
+	}
+}
+
 func TestDeleteRepoAndList(t *testing.T) {
 	ctx := context.Background()
 	reg, _ := newRegistry(t)

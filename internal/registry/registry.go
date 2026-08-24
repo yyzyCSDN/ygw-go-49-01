@@ -160,3 +160,15 @@ func secondsToDuration(seconds int) (d time.Duration) {
 	}
 	return time.Duration(seconds) * time.Second
 }
+
+// gcForTest exposes the GC handle for tests that need to drive Mark and Sweep
+// independently to reproduce races between a push and garbage collection.
+func (r *Registry) gcForTest() (*gc.GC, error) {
+	return r.gc, nil
+}
+
+// gcSweepForTest drives only the Sweep phase against a precomputed reachable
+// set, so tests can interleave a concurrent push between Mark and Sweep.
+func (r *Registry) gcSweepForTest(ctx context.Context, repoName string, reachable map[string]bool) error {
+	return r.gc.Sweep(ctx, repoName, reachable, map[string]bool{})
+}

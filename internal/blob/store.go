@@ -212,16 +212,30 @@ func (s *memoryStore) List(ctx context.Context, repo string) []string {
 	return out
 }
 
-// SweepUnreferenced removes blobs that are not in the reachable set. The
-// whole scan and deletion run under one write lock, so a blob committed
-// between the reachability computation and the sweep cannot be deleted: Put
-// either completed before the lock was taken (and is therefore visible) or it
-// runs after the sweep releases the lock.
+// SweepUnreferenced removes blobs that are neither in the reachable set nor
+// held by an in-flight upload. The whole scan and deletion run under one write
+// lock, so a blob committed between the reachability computation and the sweep
+// is seen consistently: Put either completed before the lock was taken (and is
+// therefore visible, with its upload reference still held) or it runs after
+// the sweep releases the lock. A blob whose reference count is still positive
+// is the bytes half of a push whose manifest has not landed yet; collecting it
+// would drop a live reference and break a pull that arrives right after, so it
+// is left for a later pass.
 func (s *memoryStore) SweepUnreferenced(ctx context.Context, repo string, reachable map[string]bool) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var removed []string
 	for shard, shardBlobs := range s.blobs[repo] {
-		for digest := range shardBlobs {
+		for digest, b := range shardBlobs {
 			if reachable[digest] {
+				continue
+			}
+			// Honor in-flight upload references. Mark computes a snapshot, but
+			// a concurrent PushBlob can land a blob (RefCount == 1) between Mark
+			// and Sweep, before its manifest is stored and tagged. That blob is
+			// live even though no tag reaches it yet; the owning push releases
+			// the reference only after the manifest is tagged and reachable.
+			if b != nil && b.RefCount > 0 {
 				continue
 			}
 			delete(s.blobs[repo][shard], digest)
