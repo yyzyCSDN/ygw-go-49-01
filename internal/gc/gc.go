@@ -42,6 +42,27 @@ func (g *GC) Run(ctx context.Context, repoName string) error {
 	return g.Sweep(ctx, repoName, reachable, manifests)
 }
 
+// RunOrphan reclaims an orphan namespace: one that was deleted while a push was
+// still in flight. Such a namespace has no live tags, so Mark finds nothing
+// reachable, but the blobs those pushes committed carry an upload reference no
+// manifest will ever release. SweepUnreferenced honors that reference count and
+// would leave the blobs behind, so an orphan is swept wholesale: every blob in
+// the namespace is reclaimed regardless of reference count.
+func (g *GC) RunOrphan(ctx context.Context, repoName string) error {
+	if _, _, err := g.Mark(ctx, repoName); err != nil {
+		return err
+	}
+	for _, digest := range g.manifests.List(ctx, repoName) {
+		if err := g.deleteManifest(ctx, repoName, digest); err != nil {
+			return err
+		}
+	}
+	if _, err := blob.SweepNamespaceBlobs(ctx, g.blobs, repoName); err != nil {
+		return err
+	}
+	return nil
+}
+
 // reachableManifests returns the set of manifest digests referenced by tags.
 func (g *GC) reachableManifests(ctx context.Context, repoName string) (map[string]int, map[string]int) {
 	tags := g.tags.List(ctx, repoName)

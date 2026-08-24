@@ -28,4 +28,10 @@ type Store interface {
 // committed while the reachable set was computed is never deleted.
 type Sweeper interface {
 	SweepUnreferenced(ctx context.Context, repo string, reachable map[string]bool) ([]string, error)
+	// SweepNamespace reclaims every blob in a namespace regardless of its
+	// reference count. It is reserved for namespaces that were deleted while
+	// pushes were in flight: such a namespace has no live tags or manifests, so
+	// the refcounts on its blobs are upload references that no manifest will
+	// ever release. SweepUnreferenced would skip them forever.
+	SweepNamespace(ctx context.Context, repo string) ([]string, error)
 }

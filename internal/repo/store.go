@@ -49,6 +49,11 @@ func (s *memoryStore) Get(ctx context.Context, name string) (Repository, error) 
 	return r, nil
 }
 
+// Delete soft-deletes a repository namespace. When pushes are still in flight
+// the namespace is recorded as an orphan so a later GC pass can return to it
+// and reclaim blobs those pushes committed after the deletion landed. Without
+// this marker the namespace drops out of every GC scan and the blobs become
+// permanent orphans that manual cleanup has to chase down again and again.
 func (s *memoryStore) Delete(ctx context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -59,6 +64,9 @@ func (s *memoryStore) Delete(ctx context.Context, name string) error {
 	now := time.Now()
 	r.DeletedAt = &now
 	s.repos[name] = r
+	if s.inflight[name] > 0 {
+		s.orphans[name] = true
+	}
 	return nil
 }
 
@@ -131,4 +139,17 @@ func (s *memoryStore) Orphans(ctx context.Context) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ForgetOrphan clears the orphan marker for a namespace after GC has reclaimed
+// everything in it. A namespace stays an orphan from the moment it is deleted
+// with pushes in flight until GC confirms it is empty, so concurrent pushes
+// that commit into the deleted namespace between GC passes keep it listed.
+// Once GC has swept the namespace clean the marker is dropped so the namespace
+// does not stay on the orphan list forever and the manual-clear-stays-cleared
+// property holds.
+func (s *memoryStore) ForgetOrphan(ctx context.Context, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.orphans, name)
 }

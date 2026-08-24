@@ -30,6 +30,7 @@ type Store interface {
 	Alive(ctx context.Context, name string) bool
 	List(ctx context.Context) []string
 	Orphans(ctx context.Context) []string
+	ForgetOrphan(ctx context.Context, name string)
 	Enter(ctx context.Context, repo string) (release func(), err error)
 	Count(ctx context.Context, repo string) int
 }

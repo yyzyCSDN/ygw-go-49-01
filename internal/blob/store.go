@@ -220,8 +220,8 @@ func (s *memoryStore) List(ctx context.Context, repo string) []string {
 func (s *memoryStore) SweepUnreferenced(ctx context.Context, repo string, reachable map[string]bool) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var removed []string
-	for shard, shardBlobs := range s.blobs[repo] {
+	var doomed []string
+	for _, shardBlobs := range s.blobs[repo] {
 		for digest, b := range shardBlobs {
 			if reachable[digest] {
 				continue
@@ -229,13 +229,42 @@ func (s *memoryStore) SweepUnreferenced(ctx context.Context, repo string, reacha
 			if b.RefCount > 0 {
 				continue
 			}
-			delete(s.blobs[repo][shard], digest)
-			delete(s.data[repo][shard], digest)
-			removed = append(removed, digest)
+			doomed = append(doomed, digest)
 		}
 	}
-	sort.Strings(removed)
-	return removed, nil
+	for _, digest := range doomed {
+		shard := s.shardKey(repo, digest)
+		delete(s.blobs[repo][shard], digest)
+		delete(s.data[repo][shard], digest)
+	}
+	sort.Strings(doomed)
+	return doomed, nil
+}
+
+// SweepNamespace removes every blob in a namespace regardless of reference
+// count. It is only safe to call for a namespace that no live repository
+// backs, because it does not honor the refcount that protects blobs still
+// referenced by manifests or in-flight uploads. GC uses it to reclaim the
+// orphan blobs a push committed into a repository that was deleted under it;
+// those blobs carry an upload reference no manifest will ever release, so the
+// refcount check in SweepUnreferenced would leave them behind forever.
+func (s *memoryStore) SweepNamespace(ctx context.Context, repo string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var doomed []string
+	for shard, shardBlobs := range s.blobs[repo] {
+		_ = shard
+		for digest := range shardBlobs {
+			doomed = append(doomed, digest)
+		}
+	}
+	for _, digest := range doomed {
+		shard := s.shardKey(repo, digest)
+		delete(s.blobs[repo][shard], digest)
+		delete(s.data[repo][shard], digest)
+	}
+	sort.Strings(doomed)
+	return doomed, nil
 }
 
 // SweepUnreferencedBlobs is a helper for callers that only hold the Store
@@ -246,4 +275,16 @@ func SweepUnreferencedBlobs(ctx context.Context, st Store, repo string, reachabl
 		return nil, errors.New("artifactregistry: blob store does not support sweep")
 	}
 	return sweeper.SweepUnreferenced(ctx, repo, reachable)
+}
+
+// SweepNamespaceBlobs is a helper for callers that only hold the Store
+// interface; it requires the underlying store to implement Sweeper. Unlike
+// SweepUnreferencedBlobs it ignores reference counts, so it must only be used
+// for namespaces that are already gone (deleted while pushes were in flight).
+func SweepNamespaceBlobs(ctx context.Context, st Store, repo string) ([]string, error) {
+	sweeper, ok := st.(Sweeper)
+	if !ok {
+		return nil, errors.New("artifactregistry: blob store does not support sweep")
+	}
+	return sweeper.SweepNamespace(ctx, repo)
 }

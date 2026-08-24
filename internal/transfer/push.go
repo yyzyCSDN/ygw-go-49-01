@@ -104,12 +104,18 @@ func (p *Pusher) ResumeOffset(ctx context.Context, tokenID, sessionID string) (i
 }
 
 // CompleteSession finishes a chunked upload after confirming the repository
-// is still alive. A push that commits into a deleted repository would leave an
-// orphan blob that no GC pass can reach.
+// is still alive. A push that entered before a concurrent Delete must not be
+// allowed to commit its assembled bytes into a deleted repository: the blob
+// would carry an upload reference that no manifest ever releases, and because
+// the namespace is gone no tag can ever reach it, leaving a permanent orphan.
 func (p *Pusher) CompleteSession(ctx context.Context, tokenID, sessionID string) (model.Blob, error) {
-	_, err := p.sessions.Get(ctx, tokenID, sessionID)
+	session, err := p.sessions.Get(ctx, tokenID, sessionID)
 	if err != nil {
 		return model.Blob{}, err
+	}
+	if !p.repos.Alive(ctx, session.Repo) {
+		_ = p.sessions.Abort(ctx, tokenID, sessionID)
+		return model.Blob{}, repo.ErrRepositoryDeleted
 	}
 	return p.sessions.Complete(ctx, tokenID, sessionID)
 }

@@ -142,15 +142,38 @@ type GCReport struct {
 
 // RunGC runs garbage collection on the requested repository plus every
 // orphaned namespace so blobs left behind by interrupted pushes are reclaimed.
+// An orphan namespace (deleted while a push was in flight) is swept wholesale
+// and then forgotten, so the namespace does not linger on the orphan list and
+// the blobs a concurrent push committed into it do not come back.
 func (r *Registry) RunGC(ctx context.Context, repoName string) (GCReport, error) {
 	namespaces := []string{repoName}
-	namespaces = append(namespaces, r.repos.Orphans(ctx)...)
+	orphans := r.repos.Orphans(ctx)
+	namespaces = append(namespaces, orphans...)
 	for _, ns := range namespaces {
-		if err := r.gc.Run(ctx, ns); err != nil {
+		var err error
+		if isOrphan(orphans, ns) {
+			err = r.gc.RunOrphan(ctx, ns)
+		} else {
+			err = r.gc.Run(ctx, ns)
+		}
+		if err != nil {
 			return GCReport{}, err
 		}
 	}
+	for _, ns := range orphans {
+		r.repos.ForgetOrphan(ctx, ns)
+	}
 	return GCReport{Namespaces: namespaces}, nil
+}
+
+// isOrphan reports whether ns is in the orphan list.
+func isOrphan(orphans []string, ns string) bool {
+	for _, o := range orphans {
+		if o == ns {
+			return true
+		}
+	}
+	return false
 }
 
 // secondsToDuration converts seconds to a duration, defaulting to 3600.
